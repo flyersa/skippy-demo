@@ -12,7 +12,9 @@ const capYou = document.getElementById('caption-you');
 const capSkippy = document.getElementById('caption-skippy');
 const talkBtn = document.getElementById('talk-btn');
 const talkLabel = document.getElementById('talk-label');
+const talkHint = document.getElementById('talk-hint');
 const stopBtn = document.getElementById('stop-btn');
+function _dismissHint() { if (talkHint) talkHint.classList.add('gone'); talkBtn.classList.remove('hint-pulse'); }
 const textBtn = document.getElementById('text-btn');
 const textSheet = document.getElementById('text-sheet');
 const textInput = document.getElementById('text-input');
@@ -98,10 +100,25 @@ function scheduleIdleClear() {
 // ===== header decode + audio (L16 24k stream) =====
 function decodeHeader(v) { if (!v) return ''; try { return new TextDecoder().decode(Uint8Array.from(atob(v), c => c.charCodeAt(0))); } catch { return ''; } }
 const SAMPLE_RATE = 24000;
-let audioCtx = null;
+let audioCtx = null, _audioPrimed = false;
 function ensureAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+  // iOS Safari rejects a forced sampleRate and is strict about unlocking the
+  // context inside a user gesture. Use the device-native rate (the 24 kHz PCM
+  // buffers below are resampled to it by the Web Audio API), resume on gesture,
+  // and prime with a silent buffer to fully unlock playback on iOS.
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AC();
+  }
   if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (!_audioPrimed) {
+    try {
+      const b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+      const s = audioCtx.createBufferSource();
+      s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+      _audioPrimed = true;
+    } catch (e) {}
+  }
   return audioCtx;
 }
 let _sources = [];
@@ -204,6 +221,7 @@ function pickMime() {
 }
 async function startRec() {
   if (_busy || _recording) return;
+  _dismissHint();
   ensureAudio(); ensureBridges();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { statePill.textContent = 'mic needs HTTPS'; return; }
   try { _mic = await navigator.mediaDevices.getUserMedia({ audio: true }); }
@@ -235,7 +253,7 @@ stopBtn.addEventListener('click', interrupt);
 // ===== text mode =====
 textBtn.addEventListener('click', () => { textSheet.classList.remove('hidden'); textInput.focus(); });
 textCancel.addEventListener('click', () => { textSheet.classList.add('hidden'); textInput.value = ''; });
-function sendText() { const t = textInput.value.trim(); if (!t) return; try { ensureAudio(); ensureBridges(); } catch (e) {} textInput.value = ''; textSheet.classList.add('hidden'); doTurn('say', t); }
+function sendText() { const t = textInput.value.trim(); if (!t) return; _dismissHint(); try { ensureAudio(); ensureBridges(); } catch (e) {} textInput.value = ''; textSheet.classList.add('hidden'); doTurn('say', t); }
 textSend.addEventListener('click', sendText);
 textInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
 
@@ -251,4 +269,5 @@ discBtn.addEventListener('click', () => {
 
 // ===== boot =====
 setState('active'); loadVisualFor('active');
+talkBtn.classList.add('hint-pulse');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

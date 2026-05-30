@@ -119,3 +119,15 @@ body { user-select: none; }
 #disc-accept { width: 100%; margin-top: 8px; padding: 14px; font-size: 16px; font-weight: 700;
   border: none; border-radius: 12px; background: var(--accent); color: #1a1300; cursor: pointer; }
 #disc-accept:active { transform: translateY(1px); }
+
+/* ===== "you can talk" hint ===== */
+#talk-hint { position: absolute; left: 0; right: 0; bottom: 150px; z-index: 6;
+  text-align: center; color: var(--muted); font-size: 13px; line-height: 1.4;
+  padding: 0 18px; pointer-events: none; transition: opacity .4s ease; }
+#talk-hint b { color: var(--accent); }
+#talk-hint.gone { opacity: 0; }
+#talk-btn.hint-pulse { animation: hintpulse 1.9s ease-in-out infinite; }
+@keyframes hintpulse {
+  0%,100% { box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  50%     { box-shadow: 0 0 0 7px rgba(240,196,25,.30), 0 6px 20px rgba(0,0,0,.45); }
+}
