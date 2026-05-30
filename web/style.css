@@ -39,7 +39,16 @@ body { user-select: none; }
 .cap { display: inline-block; max-width: 92%; padding: 8px 14px; border-radius: 14px;
   font-size: 16px; line-height: 1.35; margin: 4px auto; }
 .cap-you { background: rgba(15,22,38,.85); color: var(--muted); font-size: 14px; }
-.cap-skippy { background: rgba(13,59,102,.9); color: var(--fg); border: 1px solid var(--accent); }
+/* Long replies are capped in height and scroll (with a styled scrollbar) instead
+   of stacking a wall of text up the screen. Auto-scrolls with the audio; manual
+   scroll takes over. pointer-events re-enabled (parent #caption disables them). */
+.cap-skippy { background: rgba(13,59,102,.9); color: var(--fg); border: 1px solid var(--accent);
+  text-align: left; max-height: 34vh; overflow-y: auto; pointer-events: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--accent) transparent; }
+.cap-skippy::-webkit-scrollbar { width: 6px; }
+.cap-skippy::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
+.cap-skippy::-webkit-scrollbar-track { background: transparent; }
 
 #dock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
   display: flex; align-items: center; justify-content: center; gap: 18px;

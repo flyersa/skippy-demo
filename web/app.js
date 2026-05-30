@@ -67,7 +67,8 @@ function setState(name) {
   body.classList.add('state-' + name);
   currentState = name;
   statePill.textContent = STATE_LABEL[name];
-  stopBtn.classList.toggle('hidden', name !== 'speaking');
+  // Allow cancelling during the wait (thinking) AND playback (speaking).
+  stopBtn.classList.toggle('hidden', name !== 'speaking' && name !== 'thinking');
   loadVisualFor(name);
 }
 charVideo.addEventListener('ended', () => {
@@ -79,11 +80,40 @@ charVideo.addEventListener('ended', () => {
   } else { charVideo.currentTime = 0; charVideo.play().catch(() => {}); }
 });
 
-// ===== captions (auto-fade) =====
+// ===== captions (scrollable + auto-scroll, auto-fade) =====
+let _scrollRAF = null;
+function cancelAutoScroll() {
+  if (_scrollRAF) { cancelAnimationFrame(_scrollRAF); _scrollRAF = null; }
+}
+// Gently scroll the Skippy bubble from top to bottom over the spoken duration so
+// the visible text follows the audio. Any manual scroll/touch cancels it.
+function autoScrollCaption(durationSec) {
+  cancelAutoScroll();
+  const el = capSkippy;
+  const max = el.scrollHeight - el.clientHeight;
+  if (max <= 4) return;
+  const durMs = Math.max(1200, durationSec * 1000);
+  const start = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  let stopped = false;
+  const onUser = () => { stopped = true; cancelAutoScroll(); cleanup(); };
+  function cleanup() { el.removeEventListener('wheel', onUser); el.removeEventListener('touchstart', onUser); }
+  el.addEventListener('wheel', onUser, { passive: true });
+  el.addEventListener('touchstart', onUser, { passive: true });
+  const step = (now) => {
+    if (stopped) return;
+    const t = Math.min(1, (now - start) / durMs);
+    el.scrollTop = max * t;
+    if (t < 1) _scrollRAF = requestAnimationFrame(step);
+    else cleanup();
+  };
+  _scrollRAF = requestAnimationFrame(step);
+}
 function showCaption(you, skippy) {
+  cancelAutoScroll();
   capYou.textContent = you || ''; capSkippy.textContent = skippy || '';
   capYou.style.display = you ? 'block' : 'none';
   capSkippy.style.display = skippy ? 'block' : 'none';
+  capSkippy.scrollTop = 0;   // start long replies at the top
   captionWrap.classList.toggle('hidden', !you && !skippy);
 }
 function hideCaption() { captionWrap.classList.add('hidden'); }
@@ -122,6 +152,14 @@ function ensureAudio() {
   return audioCtx;
 }
 let _sources = [];
+// Cancellable tail wait: streamReply parks here until the scheduled audio ends,
+// but interrupt() must be able to resolve it instantly so a cancel frees the
+// turn immediately instead of staying _busy for the full (now-silent) duration.
+let _tailTimer = null, _tailResolve = null;
+function _clearTail() {
+  if (_tailTimer) { clearTimeout(_tailTimer); _tailTimer = null; }
+  if (_tailResolve) { const r = _tailResolve; _tailResolve = null; r(); }
+}
 function _stopAll() { _sources.forEach(s => { try { s.stop(); } catch {} }); _sources = []; }
 async function streamReply(resp) {
   const ctx = ensureAudio();
@@ -148,7 +186,13 @@ async function streamReply(resp) {
     s.start(at); _sources.push(s);
     until = at + (f32.length / SAMPLE_RATE);
   }
-  await new Promise(r => setTimeout(r, Math.max(0, (until - ctx.currentTime) * 1000) + 120));
+  // Follow the audio with the caption, then park (cancellably) until it ends.
+  autoScrollCaption(Math.max(0, until - ctx.currentTime));
+  const waitMs = Math.max(0, (until - ctx.currentTime) * 1000) + 120;
+  await new Promise(r => {
+    _tailResolve = r;
+    _tailTimer = setTimeout(() => { _tailTimer = null; _tailResolve = null; r(); }, waitMs);
+  });
 }
 
 // ===== bridge phrases (play instantly to mask LLM+TTS latency) =====
@@ -206,9 +250,14 @@ async function doTurn(kind, payload) {
     setState('speaking');
     await streamReply(resp);   // stops the bridge on its first real audio chunk
   } catch (e) { if (e.name !== 'AbortError') console.warn('[turn]', e); }
-  finally { stopBridge(); _stopAll(); _busy = false; _abort = null; setState('active'); scheduleIdleClear(); }
+  finally { stopBridge(); _stopAll(); _clearTail(); cancelAutoScroll(); _busy = false; _abort = null; setState('active'); scheduleIdleClear(); }
 }
-function interrupt() { if (_abort) { try { _abort.abort(); } catch {} } _stopAll(); }
+// Cancel everything in flight and free the turn immediately so the user can ask
+// something new right away (abort the request, kill audio, release the tail wait).
+function interrupt() {
+  if (_abort) { try { _abort.abort(); } catch {} }
+  _stopAll(); stopBridge(); cancelAutoScroll(); _clearTail();
+}
 
 // ===== push-to-talk (tap toggle) =====
 let _rec = null, _chunks = [], _mic = null, _recording = false, _recTimer = null;
