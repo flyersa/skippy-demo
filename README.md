@@ -1,5 +1,7 @@
 # Skippy the Magnificent — demo
 
+online as demo here: https://skippy.thinknerd.de
+
 A small, self-contained voice + text chat demo of **Skippy the Magnificent**: an
 animated avatar you can talk to (push-to-talk) or type to, powered by a local
 open LLM (via [Ollama](https://ollama.com)) for the words and XTTS v2 for the
