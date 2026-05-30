@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d3b66">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Skippy">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+<title>Skippy the Magnificent</title>
+</head>
+<body class="state-active">
+
+  <div id="disclaimer">
+    <div class="disc-card">
+      <div class="disc-badge">SK</div>
+      <h1>Before you talk to Skippy</h1>
+      <p>Skippy the Magnificent is a character from the <strong>Expeditionary Force</strong>
+         series by author <strong>Craig Alanson</strong>, brought to life in the audiobooks
+         by narrator <strong>R.C. Bray</strong>.</p>
+      <p>This is a <strong>non-commercial fan demonstration, for personal use only</strong>.
+         It is not affiliated with, endorsed by, or meant to disregard the work of Craig
+         Alanson or R.C. Bray.</p>
+      <p>If you love Skippy, please <strong>support the creators</strong> — buy the books and
+         the audiobooks. Learn more about Skippy and Expeditionary Force at
+         <a href="https://www.craigalanson.com/" target="_blank" rel="noopener noreferrer">craigalanson.com</a>.</p>
+      <button id="disc-accept">I understand — let me in</button>
+    </div>
+  </div>
+
+  <div id="stage">
+    <video id="char-video" class="char" src="/clips/idle.mp4" muted autoplay playsinline></video>
+
+    <div id="topbar">
+      <div id="state-pill">ready</div>
+      <div id="brand">SKIPPY · demo</div>
+    </div>
+
+    <div id="caption" class="hidden">
+      <div id="caption-you" class="cap cap-you"></div>
+      <div id="caption-skippy" class="cap cap-skippy"></div>
+    </div>
+
+    <div id="dock">
+      <button id="text-btn" title="Type instead">⌨</button>
+      <button id="talk-btn" aria-label="Talk">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="2" width="6" height="13" rx="3"></rect>
+          <path d="M19 11a7 7 0 0 1-14 0"></path>
+          <line x1="12" y1="19" x2="12" y2="22"></line>
+        </svg>
+        <span id="talk-label">Talk</span>
+      </button>
+      <button id="stop-btn" class="hidden" title="Interrupt">◼</button>
+    </div>
+
+    <div id="text-sheet" class="hidden">
+      <input id="text-input" type="text" placeholder="Say something to Skippy…"
+             autocomplete="off" enterkeyhint="send">
+      <button id="text-send">Send</button>
+      <button id="text-cancel">✕</button>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

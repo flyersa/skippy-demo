@@ -1,0 +1,15 @@
+{
+  "name": "Skippy the Magnificent (demo)",
+  "short_name": "Skippy",
+  "description": "Talk to Skippy the Magnificent — a public demo.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#070a12",
+  "theme_color": "#0d3b66",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

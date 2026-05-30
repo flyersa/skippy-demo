@@ -1,0 +1,13 @@
+# Install a CUDA-enabled PyTorch FIRST, matching your GPU/driver, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# then install the rest below. See voice/README.md for known-good versions.
+coqui-tts
+faster-whisper
+ctranslate2
+torchcodec
+soundfile
+numpy<2
+aiohttp>=3.10
+# ctranslate2 needs CUDA cuDNN/cuBLAS at runtime; these wheels usually satisfy it:
+nvidia-cudnn-cu12
+nvidia-cublas-cu12

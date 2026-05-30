@@ -1,0 +1,44 @@
+# Generic single-box deployment. The voice + ollama services need a CUDA GPU;
+# how you expose the GPU to containers depends on your container runtime
+# (e.g. the NVIDIA Container Toolkit). Adjust the `deploy.resources` / runtime
+# bits for your setup. You can also just run the three pieces directly without
+# Docker — see README.md.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      - OLLAMA_NUM_PARALLEL=2        # keep the KV cache small so the model fits fully on GPU
+      - OLLAMA_CONTEXT_LENGTH=8192
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama-models:/root/.ollama
+    gpus: all                        # requires the NVIDIA Container Toolkit
+    restart: unless-stopped
+
+  voice:
+    build: ./voice
+    environment:
+      - COQUI_TOS_AGREED=1
+      - VOICE_REF=/app/assets/voice/skippy-voice-ref.wav
+    volumes:
+      - ./assets:/app/assets:ro
+    gpus: all
+    restart: unless-stopped
+
+  brain:
+    build: ./brain
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - VOICE_URL=http://voice:8770
+      - DEMO_MODEL=qwen2.5:32b-instruct-q5_K_M
+    volumes:
+      - ./web:/app/web:ro
+      - ./assets:/app/assets:ro
+    ports:
+      - "8080:8080"
+    depends_on: [ollama, voice]
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
