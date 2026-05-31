@@ -11,3 +11,12 @@ venv/
 .vscode/
 *.tmp
 _assets.tar
+
+# RAG: never commit copyrighted source material or the derived index
+rag/books/
+rag/index/
+*.pdf
+*.epub
+embeddings.npy
+chunks.json
+titles.json
