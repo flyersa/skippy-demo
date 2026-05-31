@@ -22,7 +22,18 @@ brain/     the orchestrator + web server (no GPU needed)
 voice/     speech-to-text + Skippy text-to-speech (needs a CUDA GPU)
 web/        the PWA front-end (avatar, push-to-talk, captions)
 assets/     avatar clips + sprites (bring your own voice reference; bridges are generated)
+rag/        OPTIONAL retrieval over your own ebooks (off by default; see rag/README.md)
 ```
+
+### Optional: Q&A log + debug console
+
+Both are **off by default**. Set `DEMO_QALOG_FILE=/path/qa.jsonl` to append each
+turn (timestamp, truncated device id, question, answer, whether RAG was used).
+Set `DEMO_DEBUG_PASSWORD` to enable a read-only console at `/debug` (HTTP Basic
+auth) that groups turns into per-device conversations, shows what was asked and
+answered, flags RAG-assisted answers, and paginates. With no password, `/debug`
+returns 404. **Never hardcode the password — inject it from a secret.** Enabling
+the log means recording user input; treat the file as sensitive.
 
 Three moving parts: a browser talks **only** to the **brain**; the brain calls an
 **Ollama** server (text) and the **voice** server (speech). They can all run on

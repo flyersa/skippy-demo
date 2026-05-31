@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
+import html
+import json
 import logging
 import os
 import re
@@ -39,6 +42,12 @@ VOICE_URL = os.environ.get("VOICE_URL", "http://localhost:8770").rstrip("/")
 RAG_URL = os.environ.get("RAG_URL", "http://localhost:8771").rstrip("/")
 RAG_ENABLED = os.environ.get("DEMO_RAG_ENABLED", "0").lower() not in ("0", "false", "no", "off", "")
 RAG_K = int(os.environ.get("DEMO_RAG_K", "4"))
+# Optional Q&A log (JSONL) + read-only /debug console over it. Both OFF by
+# default: no file path => no logging; no password => /debug returns 404.
+# If you enable logging you are recording user input — set a password and treat
+# the file as sensitive. NEVER hardcode the password; inject it from a secret.
+QALOG_FILE = os.environ.get("DEMO_QALOG_FILE", "")
+DEBUG_PASSWORD = os.environ.get("DEMO_DEBUG_PASSWORD", "")
 MODEL = os.environ.get("DEMO_MODEL", "qwen2.5:32b-instruct-q5_K_M")
 STATIC = Path(os.environ.get("DEMO_STATIC", "web"))
 ASSETS_DIR = Path(os.environ.get("DEMO_ASSETS", "assets"))
@@ -293,7 +302,22 @@ async def _ollama_reply(device_id: str, user_text: str) -> str:
             reply = "Ugh. My genius briefly exceeded this puny demo. Try again, monkey."
         s["messages"].append({"role": "user", "content": user_text})
         s["messages"].append({"role": "assistant", "content": reply})
-        return reply
+        return reply, bool(canon)
+
+
+def _qa_log(device_id: str, question: str, reply: str, rag_used: bool = False) -> None:
+    """Optional JSONL log of each turn. Disabled when DEMO_QALOG_FILE is empty.
+    Stores a truncated device id (not PII) so the /debug console can group turns
+    into conversations."""
+    if not QALOG_FILE:
+        return
+    try:
+        rec = {"ts": int(time.time()), "dev": device_id[:8], "q": question,
+               "a": reply, "rag": bool(rag_used)}
+        with open(QALOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.warning("qa_log write failed: %s", e)
 
 
 async def _synth(text: str) -> bytes:
@@ -320,7 +344,8 @@ async def _do_turn(request: web.Request, user_text: str, transcript: str) -> web
         return web.json_response(
             {"error": "Skippy is busy being magnificent — try again in a moment."}, status=503)
     try:
-        reply = await _ollama_reply(device_id, user_text)
+        reply, rag_used = await _ollama_reply(device_id, user_text)
+        _qa_log(device_id, user_text, reply, rag_used)
         resp = web.StreamResponse(headers={
             "Content-Type": "audio/L16; rate=24000; channels=1",
             "X-Skippy-Reply": _b64(reply),
@@ -429,6 +454,175 @@ async def healthz(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "model": MODEL, "sessions": len(_sessions)})
 
 
+# --- optional read-only debug console ----------------------------------------
+# Grouped-by-device conversation viewer over the Q&A log. HTTP Basic auth,
+# password from env (inject from a secret). 404 if no password is set.
+
+def _debug_authed(request: web.Request) -> bool:
+    hdr = request.headers.get("Authorization", "")
+    if not hdr.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(hdr[6:]).decode("utf-8", "replace")
+    except Exception:
+        return False
+    _, _, pw = raw.partition(":")          # any username; only the password matters
+    return hmac.compare_digest(pw, DEBUG_PASSWORD)
+
+
+def _debug_gate(request: web.Request):
+    if not DEBUG_PASSWORD:
+        return web.Response(status=404, text="Not found")
+    if not _debug_authed(request):
+        return web.Response(status=401, text="Auth required",
+                            headers={"WWW-Authenticate": 'Basic realm="skippy-debug"'})
+    return None
+
+
+def _load_qa() -> list[dict]:
+    if not QALOG_FILE or not Path(QALOG_FILE).exists():
+        return []
+    rows = []
+    with open(QALOG_FILE, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+    return rows
+
+
+async def debug_data(request: web.Request) -> web.Response:
+    gate = _debug_gate(request)
+    if gate is not None:
+        return gate
+    rows = _load_qa()
+    convos: "OrderedDict[str, dict]" = OrderedDict()
+    for r in rows:
+        dev = r.get("dev", "?") or "?"
+        c = convos.get(dev)
+        if c is None:
+            c = {"dev": dev, "turns": [], "first": r.get("ts", 0), "last": r.get("ts", 0), "rag": 0}
+            convos[dev] = c
+        c["turns"].append({"ts": r.get("ts", 0), "q": r.get("q", ""),
+                           "a": r.get("a", ""), "rag": bool(r.get("rag", False))})
+        c["first"] = min(c["first"], r.get("ts", 0))
+        c["last"] = max(c["last"], r.get("ts", 0))
+        if r.get("rag"):
+            c["rag"] += 1
+    conv_list = sorted(convos.values(), key=lambda c: c["last"], reverse=True)
+
+    q = (request.query.get("q") or "").strip().lower()
+    if q:
+        conv_list = [c for c in conv_list
+                     if any(q in (t["q"] or "").lower() or q in (t["a"] or "").lower() for t in c["turns"])]
+
+    try:
+        page = max(1, int(request.query.get("page", "1")))
+    except ValueError:
+        page = 1
+    per = 15
+    total = len(conv_list)
+    pages = max(1, (total + per - 1) // per)
+    page = min(page, pages)
+    window = conv_list[(page - 1) * per: page * per]
+    return web.json_response({
+        "page": page, "pages": pages, "total_convos": total,
+        "total_turns": len(rows), "rag_turns": sum(1 for r in rows if r.get("rag")),
+        "convos": window,
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def debug_page(request: web.Request) -> web.Response:
+    gate = _debug_gate(request)
+    if gate is not None:
+        return gate
+    return web.Response(text=_DEBUG_HTML, content_type="text/html", headers={
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                                   "style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+    })
+
+
+_DEBUG_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skippy demo — debug</title><style>
+:root{--bg:#070a12;--fg:#e6f0ff;--muted:#7fa6cc;--panel:#0f1626;--bd:#1d2a44;--accent:#f0c419;--brand:#0d3b66}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,Segoe UI,sans-serif}
+header{position:sticky;top:0;background:#0a1120;border-bottom:1px solid var(--bd);padding:12px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+h1{font-size:16px;margin:0;color:var(--accent)}
+.stat{color:var(--muted);font-size:13px}.stat b{color:var(--fg)}
+input,button{font:inherit;border:1px solid var(--bd);background:#0a1120;color:var(--fg);border-radius:8px;padding:7px 12px}
+button{cursor:pointer;background:var(--brand)}button:disabled{opacity:.4;cursor:default}
+#wrap{padding:14px 16px;max-width:1000px;margin:0 auto}
+.convo{border:1px solid var(--bd);border-radius:12px;margin-bottom:12px;background:var(--panel);overflow:hidden}
+.chead{padding:10px 14px;cursor:pointer;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.chead:hover{background:#121b2e}.dev{font-family:ui-monospace,monospace;color:var(--accent);font-weight:700}
+.badge{font-size:12px;color:var(--muted);background:#0a1120;border:1px solid var(--bd);border-radius:20px;padding:2px 9px}
+.turns{border-top:1px solid var(--bd);padding:6px 14px 12px;display:none}
+.convo.open .turns{display:block}
+.turn{padding:9px 0;border-bottom:1px dashed rgba(255,255,255,.06)}.turn:last-child{border:0}
+.q{color:#cfe3ff}.a{color:var(--muted);margin-top:4px;white-space:pre-wrap}
+.tlabel{color:var(--accent);font-weight:700;margin-right:6px}.ts{color:#5e7da3;font-size:12px;margin-right:8px}
+.rag{font-size:11px;color:#0a1120;background:var(--accent);border-radius:6px;padding:1px 6px;margin-left:6px;font-weight:700}
+.pager{display:flex;gap:10px;align-items:center;justify-content:center;padding:14px}
+.muted{color:var(--muted)}
+</style></head><body>
+<header>
+  <h1>🥫 Skippy demo · debug</h1>
+  <span class="stat" id="stats">loading…</span>
+  <span style="flex:1"></span>
+  <input id="q" placeholder="search Q/A…" size="22">
+  <button id="search">Search</button>
+</header>
+<div id="wrap"><div id="list" class="muted">loading…</div>
+  <div class="pager"><button id="prev">‹ Prev</button><span id="pinfo" class="muted"></span><button id="next">Next ›</button></div>
+</div>
+<script>
+let page=1,pages=1,q="";
+function esc(s){const d=document.createElement("div");d.textContent=s==null?"":s;return d.innerHTML;}
+function fmt(ts){const d=new Date(ts*1000);return d.toLocaleString();}
+async function load(){
+  const r=await fetch(`${location.origin}/debug/data?page=${page}&q=${encodeURIComponent(q)}`,{cache:"no-store"});
+  if(!r.ok){document.getElementById("list").textContent="auth error";return;}
+  const d=await r.json();page=d.page;pages=d.pages;
+  document.getElementById("stats").innerHTML=
+    `<b>${d.total_convos}</b> conversations · <b>${d.total_turns}</b> turns · <b>${d.rag_turns}</b> RAG-assisted`;
+  document.getElementById("pinfo").textContent=`page ${d.page} / ${d.pages}`;
+  document.getElementById("prev").disabled=d.page<=1;
+  document.getElementById("next").disabled=d.page>=d.pages;
+  const list=document.getElementById("list");list.innerHTML="";
+  if(!d.convos.length){list.className="muted";list.textContent="no conversations";return;}
+  list.className="";
+  for(const c of d.convos){
+    const turns=c.turns.length;const span=turns>1?`${fmt(c.first)} → ${fmt(c.last)}`:fmt(c.first);
+    const el=document.createElement("div");el.className="convo";
+    let h=`<div class="chead"><span class="dev">${esc(c.dev)}</span>`+
+      `<span class="badge">${turns} turn${turns>1?"s":""}</span>`+
+      (c.rag?`<span class="badge">🧠 ${c.rag} RAG</span>`:"")+
+      `<span class="badge">${esc(span)}</span></div><div class="turns">`;
+    for(const t of c.turns){
+      h+=`<div class="turn"><div class="q"><span class="ts">${esc(fmt(t.ts))}</span>`+
+        `<span class="tlabel">Q</span>${esc(t.q)}</div>`+
+        `<div class="a"><span class="tlabel">A</span>${esc(t.a)}`+
+        (t.rag?`<span class="rag">RAG</span>`:"")+`</div></div>`;
+    }
+    h+=`</div>`;el.innerHTML=h;
+    el.querySelector(".chead").onclick=()=>el.classList.toggle("open");
+    list.appendChild(el);
+  }
+}
+document.getElementById("prev").onclick=()=>{if(page>1){page--;load();}};
+document.getElementById("next").onclick=()=>{if(page<pages){page++;load();}};
+document.getElementById("search").onclick=()=>{q=document.getElementById("q").value;page=1;load();};
+document.getElementById("q").addEventListener("keydown",e=>{if(e.key==="Enter"){q=e.target.value;page=1;load();}});
+load();
+</script></body></html>"""
+
+
 @web.middleware
 async def security_headers(request: web.Request, handler):
     resp = await handler(request)
@@ -475,6 +669,8 @@ def make_app() -> web.Application:
     app.router.add_get("/sprites/{name}", _asset("sprites"))
     app.router.add_get("/bridges/{name}", _asset("bridges"))
     app.router.add_get("/skippy-look.webp", webp)
+    app.router.add_get("/debug", debug_page)
+    app.router.add_get("/debug/data", debug_data)
     return app
 
 
