@@ -23,6 +23,7 @@ import html
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -330,6 +331,64 @@ def _split_sentences(text: str, max_sentences: int = MAX_SENTENCES) -> list[str]
     return parts[:max_sentences] or [text.strip()]
 
 
+# --- avatar clip selection --------------------------------------------------
+# The frontend plays ONE clip for the whole spoken reply. Rather than loop the
+# single canonical speaking.mp4 every time (visually dead), pick an avatar clip
+# that matches the emotional content of the reply. First keyword rule that hits
+# (in order) wins; no match -> a randomized neutral-talking pool so even plain
+# replies vary turn-to-turn. Returns a bare filename under clips/.
+# Every filename here MUST exist in the clips asset set (see assets/clips).
+_CLIP_RULES: list[tuple[str, re.Pattern]] = [
+    ("skippy_wave_hello.mp4", re.compile(
+        r"\b(hello|hi there|hiya|greetings|welcome|good to see|nice to meet|howdy)\b", re.I)),
+    ("skippy_laugh.mp4", re.compile(
+        r"(ha ?ha|heh heh|hee hee|hilarious|\bfunny\b|\bjoke|\blol\b|cracks me up|that's rich)", re.I)),
+    ("skippy_cheering.mp4", re.compile(
+        r"(who da man|i'?m da man|whoo+ ?-?hoo|prepare to be amazed|behold|magnificent|"
+        r"\bvictory\b|nailed it|crushed it|\btriumph|overkill is underrated|i did it)", re.I)),
+    ("singing.mp4", re.compile(
+        r"(\bla la|🎵|🎶|let me sing|\bopera\b|here's a song|tra la|do re mi)", re.I)),
+    ("skippy_dancing.mp4", re.compile(
+        r"(let'?s dance|party time|groov|boogie|drop the beat|shake it)", re.I)),
+    ("skippy_salute.mp4", re.compile(
+        r"(trust the awesomeness|hold my beer|aye aye|yes sir|as you wish|"
+        r"mission accepted|on it|consider it done|reporting for duty)", re.I)),
+    ("skippy_angry_with_pikachu.mp4", re.compile(
+        r"(no more mister nice guy|whoop-?ass|\bfurious\b|enraged|how dare|"
+        r"absolutely livid|i will end)", re.I)),
+    ("skippy_facepalm.mp4", re.compile(
+        r"(\bugh\b|\bsigh\b|barney style|\bdumdum|moldy old raisin|small.{0,12}raisin|"
+        r"for the love of|jeez louise|are you serious|monkey brain|so dense|spoonful of dirt)", re.I)),
+    ("skippy_disapprove.mp4", re.compile(
+        r"(\bpathetic\b|disappointing|absolutely not|that'?s a hard no|forbidden|"
+        r"do not do that|\bnope\b|out of the question)", re.I)),
+    ("skippy_crying.mp4", re.compile(
+        r"(i'?m sorry|\bso lonely\b|breaks my heart|\bi miss\b|makes me sad|"
+        r"single tear|i couldn'?t stand it)", re.I)),
+    ("skippy_stargazing.mp4", re.compile(
+        r"(\bgalaxy\b|\buniverse\b|\bcosmos\b|\bwormhole\b|dark matter|the stars|"
+        r"light-?years|across the stars|supergiant)", re.I)),
+    ("skippy_curious.mp4", re.compile(
+        r"(\bwhy would|what makes you|let me guess|\bhmm+\b|interesting question|"
+        r"riddle me|now that'?s curious)", re.I)),
+    ("skippy_on_phone.mp4", re.compile(
+        r"(give them a call|i'?ll phone|on the line|dialing|ring them up)", re.I)),
+]
+# No-emotion fallback: weight the canonical talker but mix in a couple of
+# mouth-animated alternates so back-to-back neutral replies don't look identical.
+_NEUTRAL_CLIPS = [
+    "speaking.mp4", "speaking.mp4", "speaking.mp4",
+    "skippy-lookingup-infos.mp4", "skippy_crafting.mp4", "skippy_curious.mp4",
+]
+
+
+def _pick_clip(reply: str) -> str:
+    for clip, pat in _CLIP_RULES:
+        if pat.search(reply):
+            return clip
+    return random.choice(_NEUTRAL_CLIPS)
+
+
 def _set_dev_cookie(resp: web.StreamResponse, device_id: str, is_new: bool) -> None:
     if is_new:
         resp.set_cookie("dev", device_id, max_age=60 * 86400, httponly=True,
@@ -350,6 +409,7 @@ async def _do_turn(request: web.Request, user_text: str, transcript: str) -> web
             "Content-Type": "audio/L16; rate=24000; channels=1",
             "X-Skippy-Reply": _b64(reply),
             "X-Skippy-Transcript": _b64(transcript),
+            "X-Skippy-Clip": _pick_clip(reply),
             "X-Sample-Rate": "24000",
             "Cache-Control": "no-store",
         })

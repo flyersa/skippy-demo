@@ -42,15 +42,25 @@ const ACTIVE_CLIP_POOL = [
   'clips/idle_pokemon_01.mp4',
 ];
 const THINKING_CLIP_POOL = ['clips/thinking.mp4', 'clips/thinking-2.mp4', 'clips/thinking-3.mp4'];
+// Fallback when the server doesn't send an X-Skippy-Clip (e.g. error replies):
+// vary the talking clip so it isn't the same loop every time.
+const SPEAKING_CLIP_POOL = [
+  'clips/speaking.mp4', 'clips/speaking.mp4', 'clips/speaking.mp4',
+  'clips/skippy-lookingup-infos.mp4', 'clips/skippy_crafting.mp4', 'clips/skippy_curious.mp4',
+];
 const STATE_LABEL = { active: 'ready', listening: 'listening…', thinking: 'thinking…', speaking: 'speaking' };
 
 let currentState = 'active';
+// Emotion clip chosen by the server for the current reply (X-Skippy-Clip);
+// consumed once when we enter the speaking state, then cleared.
+let _speakingClip = null;
 charVideo.loop = false;
 
 function loadVisualFor(state) {
   let src;
   if (state === 'active') src = ACTIVE_CLIP_POOL[Math.floor(Math.random() * ACTIVE_CLIP_POOL.length)];
   else if (state === 'thinking') src = THINKING_CLIP_POOL[Math.floor(Math.random() * THINKING_CLIP_POOL.length)];
+  else if (state === 'speaking') src = _speakingClip || SPEAKING_CLIP_POOL[Math.floor(Math.random() * SPEAKING_CLIP_POOL.length)];
   else src = CLIPS[state] || CLIPS.active;
   if (charVideo.getAttribute('src') !== src) {
     charVideo.style.opacity = '0';
@@ -246,11 +256,15 @@ async function doTurn(kind, payload) {
     }
     const reply = decodeHeader(resp.headers.get('X-Skippy-Reply'));
     const transcript = decodeHeader(resp.headers.get('X-Skippy-Transcript'));
+    // Server picks an emotion-matched clip per reply; guard against junk so a
+    // bad header can't point the <video> at an arbitrary URL.
+    const clipHdr = resp.headers.get('X-Skippy-Clip') || '';
+    _speakingClip = /^[A-Za-z0-9._-]+\.mp4$/.test(clipHdr) ? 'clips/' + clipHdr : null;
     showCaption(transcript, reply);
     setState('speaking');
     await streamReply(resp);   // stops the bridge on its first real audio chunk
   } catch (e) { if (e.name !== 'AbortError') console.warn('[turn]', e); }
-  finally { stopBridge(); _stopAll(); _clearTail(); cancelAutoScroll(); _busy = false; _abort = null; setState('active'); scheduleIdleClear(); }
+  finally { stopBridge(); _stopAll(); _clearTail(); cancelAutoScroll(); _speakingClip = null; _busy = false; _abort = null; setState('active'); scheduleIdleClear(); }
 }
 // Cancel everything in flight and free the turn immediately so the user can ask
 // something new right away (abort the request, kill audio, release the tail wait).
